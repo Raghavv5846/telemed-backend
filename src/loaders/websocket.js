@@ -4,7 +4,7 @@ const config = require('../config');
 const logger = require('../utils/logger');
 
 const rooms = new Map();
-const clientsByUserId = new Map(); // userId -> { ws, role }
+const clientsByUserId = new Map();
 
 function registerClient(userId, ws, role = 'user') {
   clientsByUserId.set(userId, { ws, role });
@@ -17,7 +17,6 @@ function unregisterClientByWs(ws) {
     const uid = ws.userId;
     if (uid) {
       clientsByUserId.delete(uid);
-      // if user was a doctor, announce offline
       if (ws.role === 'DOCTOR') {
         broadcastGlobalDoctorAvailability(uid, false, null);
       }
@@ -36,7 +35,7 @@ function getOnlineDoctorIds() {
 }
 
 function sendToClient(ws, msg) {
-  try { ws.send(JSON.stringify(msg)); } catch (e) { /* ignore */ }
+  try { ws.send(JSON.stringify(msg)); } catch (e) { }
 }
 function createWSServer(server, redis) {
     
@@ -58,27 +57,21 @@ function createWSServer(server, redis) {
             return;
         }
 
-        // require authenticated user (change if you allow anonymous)
         if (!userId) {
             ws.close(4001, 'Invalid token payload');
             return;
         }
 
-        // Use the userId as the default peerId for simpler consistent mapping.
-        // If you want separate peerId for RTC rooms you can override later on 'join'.
         const peerId = userId;
 
-        // store ids on the ws
         ws.userId = userId;
         ws.peerId = peerId;
         ws.role = role;
 
         registerClient(userId, ws, role);
 
-        // send current availability snapshot
         sendToClient(ws, { type: 'availability-list', doctorIds: getOnlineDoctorIds() });
 
-        // immediately broadcast doctor available if doc
         if (role === 'DOCTOR') {
             broadcastGlobalDoctorAvailability(userId, true);
         }
@@ -95,6 +88,8 @@ function createWSServer(server, redis) {
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw);
+        console.log("rawww",raw);
+        
         handleMessage(ws, msg, peerId, redis);
       } catch (err) {
         logger.error('Invalid message format', err);
@@ -106,7 +101,6 @@ function createWSServer(server, redis) {
     ws.on('error', err => logger.error('WS error', err));
   });
 
-  // heartbeat
   const interval = setInterval(() => {
     wss.clients.forEach(ws => {
       if (!ws.isAlive) return ws.terminate();
@@ -125,15 +119,51 @@ function getRoom(roomId) {
 }
 
 
-// helper to broadcast doctor availability to everyone (and publish to redis)
+const activeIncomingCalls = new Map();
+
+function sendToUser(userId, msg, redis) {
+  const info = clientsByUserId.get(userId);
+  if (info && info.ws && info.ws.readyState === info.ws.OPEN) {
+    try { info.ws.send(JSON.stringify(msg)); return true; } catch(e){ logger.error(e); return false; }
+  }
+  if (redis) {
+    redis.publish(`incoming:${userId}`, JSON.stringify(msg));
+  }
+  return false;
+}
+
+function setupRedisIncomingSubscriber(redis) {
+  if (!redis || !redis.subscribe) return;
+  const sub = redis.duplicate ? redis.duplicate() : redis; 
+  sub.subscribe && sub.subscribe('incoming:*'); 
+  sub.on('message', (channel, message) => {
+    try {
+      const m = JSON.parse(message);
+      const userId = channel.split(':')[1];
+      sendToUser(userId, m, null); 
+    } catch (e) { logger.error('Bad incoming redis msg', e); }
+  });
+
+}
+
+function notifyIncomingCall({ callId, callerId, doctorId, meta }, redis) {
+  const msg = {
+    type: 'incoming-call',
+    callId,
+    from: callerId,
+    doctorId,
+    meta 
+  };
+
+  const sentLocally = sendToUser(doctorId, msg, redis);
+  return sentLocally;
+}
 function broadcastGlobalDoctorAvailability(doctorId, isAvailable, redis) {
-    // send to all connected clients
     for (const [userId, info] of clientsByUserId.entries()) {
       try {
         info.ws.send(JSON.stringify({ type: 'doctor-availability', doctorId, isAvailable }));
-      } catch (e) { /* ignore */ }
+      } catch (e) { }
     }
-    // publish to redis so other nodes can also notify
     if (redis) {
       redis.publish('global:doctor-availability', JSON.stringify({ doctorId, isAvailable }));
     }
@@ -146,20 +176,80 @@ function handleMessage(ws, msg, peerId, redis) {
     return;
   }
 
+  console.log("type",payload,type,roomId);
+  
   switch(type) {
     case 'get-availability': {
-        // reply to the requesting client with snapshot
         ws.send(JSON.stringify({ type: 'availability-list', doctorIds: getOnlineDoctorIds() }));
         break;
       }
   
-      case 'call-started': {
-        // payload should contain doctorId (or you can use ws.userId)
-        const doctorId = msg.doctorId || msg.payload?.doctorId || ws.userId;
-        // mark doctor as unavailable to other users
+      case 'call-start': {
+        const doctorId = msg.doctorId || payload?.doctorId;
+        const callId = msg.callId || payload?.callId;
+        const callerId = ws.userId || msg.userId || payload?.userId;
+        const meta = payload?.meta || {};
+  
+        if (!doctorId || !callId || !callerId) {
+          return ws.send(JSON.stringify({ type: 'error', message: 'missing_call_params' }));
+        }
+  
+        const timeoutMs = 30000; 
+        if (activeIncomingCalls.has(callId)) {
+          return ws.send(JSON.stringify({ type: 'error', message: 'call_already_active' }));
+        }
+  
+        const t = setTimeout(() => {
+          const info = activeIncomingCalls.get(callId);
+          if (!info) return;
+          sendToUser(info.callerId, { type: 'call-not-answered', callId, doctorId: info.doctorId }, redis);
+          sendToUser(info.doctorId, { type: 'call-expired', callId }, redis);
+          activeIncomingCalls.delete(callId);
+        }, timeoutMs);
+  
+        activeIncomingCalls.set(callId, { callerId, doctorId, timeout: t });
+  
+        notifyIncomingCall({ callId, callerId, doctorId, meta }, redis);
+  
+        ws.send(JSON.stringify({ type: 'call-started-ack', callId }));
+        break;
+      }
+  
+      case 'call-accepted': {
+        const callId = msg.callId || payload?.callId;
+        const doctorId = ws.userId;
+        const info = activeIncomingCalls.get(callId);
+        if (!info) {
+          return ws.send(JSON.stringify({ type: 'error', message: 'unknown_call' }));
+        }
+  
+        clearTimeout(info.timeout);
+        activeIncomingCalls.delete(callId);
+  
+        sendToUser(info.callerId, { type: 'call-accepted', callId, doctorId }, redis);
+  
         broadcastGlobalDoctorAvailability(doctorId, false, redis);
-        // you may want to set some internal state for active calls:
-        // e.g., activeCalls.set(callId, { doctorId, userId: msg.userId, startedAt: Date.now() })
+  
+        ws.send(JSON.stringify({ type: 'call-accepted-ack', callId }));
+        break;
+      }
+  
+      // Doctor declines the incoming call
+      case 'call-declined': {
+        const callId = msg.callId || payload?.callId;
+        const doctorId = ws.userId;
+        const info = activeIncomingCalls.get(callId);
+        if (info) {
+          clearTimeout(info.timeout);
+          activeIncomingCalls.delete(callId);
+          sendToUser(info.callerId, { type: 'call-declined', callId, doctorId }, redis);
+        }
+        ws.send(JSON.stringify({ type: 'call-declined-ack', callId }));
+        break;
+      }
+      case 'call-started': {
+        const doctorId = msg.doctorId || msg.payload?.doctorId || ws.userId;
+        broadcastGlobalDoctorAvailability(doctorId, false, redis);
         break;
       }
   
@@ -169,17 +259,13 @@ function handleMessage(ws, msg, peerId, redis) {
         break;
       }
   
-      // existing cases: join/leave/offer/answer/ice-candidate/control...
       case 'join': {
         if (!roomId) return ws.send(JSON.stringify({ type:'error', message: 'missing_roomId'}));
         const room = getRoom(roomId);
-        // use peerId from ws if not supplied
         const actualPeerId = peerId || ws.peerId || ws.userId;
         room.set(actualPeerId, ws);
         ws.peerId = actualPeerId;
         ws.roomId = roomId;
-  
-        // notify others peer-joined
         broadcastToRoom(roomId, { type: 'peer-joined', roomId, from: actualPeerId }, actualPeerId, redis);
         ws.send(JSON.stringify({ type:'joined', roomId, peerId: actualPeerId }));
         break;
@@ -195,7 +281,6 @@ function handleMessage(ws, msg, peerId, redis) {
     case 'answer':
     case 'ice-candidate':
     case 'control': {
-      // forward to specific peer or broadcast in room
       if (!roomId) return ws.send(JSON.stringify({ type:'error', message: 'missing_roomId' }));
       if (to) {
         sendToPeer(roomId, to, { ...msg, from: peerId }, redis);
@@ -226,7 +311,6 @@ function sendToPeer(roomId, toPeerId, msg, redis) {
     const target = room.get(toPeerId);
     try { target.send(JSON.stringify(msg)); } catch(e) { logger.error(e); }
   } else if (redis) {
-    // publish to redis so other nodes can route
     redis.publish(`signals:${roomId}`, JSON.stringify({ to: toPeerId, msg }));
   }
 }
