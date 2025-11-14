@@ -306,13 +306,14 @@ function handleMessage(ws, msg, peerId, redis) {
 }
 
 function sendToPeer(roomId, toPeerId, msg, redis) {
+
   const room = rooms.get(roomId);
-  if (room && room.has(toPeerId)) {
-    const target = room.get(toPeerId);
-    try { target.send(JSON.stringify(msg)); } catch(e) { logger.error(e); }
-  } else if (redis) {
-    redis.publish(`signals:${roomId}`, JSON.stringify({ to: toPeerId, msg }));
-  }
+//   if (room && room.has(toPeerId)) {
+    const target = clientsByUserId.get(toPeerId);
+    try { target.ws.send(JSON.stringify(msg)); } catch(e) { logger.error(e); }
+//   } else if (redis) {
+    // redis.publish(`signals:${roomId}`, JSON.stringify({ to: toPeerId, msg }));
+//   }
 }
 
 function broadcastToRoom(roomId, msg, exceptPeerId, redis) {
