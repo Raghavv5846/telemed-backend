@@ -17,6 +17,10 @@ class DoctorRepository {
   async list(limit = 20, skip = 0) {
     return Doctor.list({ role: "DOCTOR"});
   }
+
+  async setStatus(id, status){
+    return Doctor.setStatus(id,status);
+  }
 }
 
 module.exports = { DoctorRepository , Doctor};

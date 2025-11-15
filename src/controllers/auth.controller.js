@@ -16,25 +16,27 @@ exports.create = async (req, res, next) => {
         const token = jwt.sign(
             {
               id: user.id,
-              role:"PATIENT"
+              role:"PATIENT",
+              name: user.name
             },
             config.jwtSecret,
             { expiresIn: '1y' },
           );
           
-        res.status(201).json({status: true, message:"logged in successfully",data: {accessToken: token ,user}});
+        res.status(201).json({status: true, message:"logged in successfully",data: {token ,...user}});
 
     }else{
         user = await doctorService.createDoctor(req.body);
         const token = jwt.sign(
             {
               id: user.id,
-              role:"PATIENT"
+              role:"DOCTOR",
+              name: user.name
             },
             config.jwtSecret,
             { expiresIn: '1y' },
           );
-        res.status(201).json({status: true, message:"Doctor registered successfully",ddata: {accessToken: token ,user}});
+        res.status(201).json({status: true, message:"Doctor registered successfully",data: {token ,...user}});
     }
   } catch (err) {
     next(err);
@@ -104,7 +106,8 @@ exports.login = async (req, res, next) => {
           const token = jwt.sign(
             {
               id: user.id,
-              role:"PATIENT"
+              role:"PATIENT",
+              name: user.name
             },
             config.jwtSecret,
             { expiresIn: '1y' },
@@ -133,7 +136,9 @@ exports.login = async (req, res, next) => {
           const token = jwt.sign(
             {
               id: user.id,
-              role:"DOCTOR"
+              role:"DOCTOR",
+              name: user.name
+
             },
             config.jwtSecret,
             { expiresIn: '1y' },

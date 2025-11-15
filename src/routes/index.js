@@ -2,7 +2,8 @@ const express = require('express');
 // import playerRoutes from './playerRoutes';
 const authRoutes = require('./authRoutes/index')
 const docRoutes = require('./doctorRoutes/index')
-const patientRoutes = require('./patientRoutes/index')
+const patientRoutes = require('./patientRoutes/index');
+const { DocMiddleWare } = require('../middlewares/auth');
 
 
 const router = express.Router();

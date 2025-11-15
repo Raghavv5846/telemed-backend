@@ -35,4 +35,29 @@ async function AuthMiddleware(req, res, next) {
   }
 }
 
-module.exports = AuthMiddleware;
+async function DocMiddleWare(req,res,next) {
+  try {
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+    if (!token) throw new ApiError('Token missing',401);
+
+    const payload = jwt.verify(token, config.jwtSecret);
+    let user;
+    if(payload.role === 'PATIENT'){    
+         throw new ApiError('Only Doctors are allowed to hit this req',402);
+    }
+         
+    user =  docRepo.findById(payload.id).lean();
+    if (!user) throw new ApiError('doctor not found or deleted',402);
+
+    req.user = user;
+    next();
+  } catch (err) {
+    console.log(err);
+    
+    logger.error('auth failed', err.message);
+    throw new ApiError('Invalid or expired token',400);
+  }
+}
+
+module.exports = { AuthMiddleware , DocMiddleWare};

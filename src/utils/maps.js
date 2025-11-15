@@ -7,9 +7,22 @@ export class MapRepo {
       this.items.set(item.id, item);
       return item;
     }
+
+    setStatus(id,status) {
+      const existing = this.items.get(id);
+      if (!existing) return null;
+
+      existing.status = status
+      let updated = existing;
+
+      this.items.set(id, updated);
+      console.log("updated set ",updated);
+      
+      return updated;
+    }
   
     findById(id) {
-      return this.items.get(id) || null;
+      return this.items.get(id) || null;      
     }
     findOne(keyOrFn, value, role) {
         

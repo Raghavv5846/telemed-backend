@@ -15,6 +15,13 @@ class DoctorService {
     return this.doctorRepo.create(doctor);
   }
 
+  async changeStatus(id, status) {
+    const user = await this.doctorRepo.findById(id);
+    if (!user) throw new ApiError('Doctor not found', 404);
+
+    return this.doctorRepo.setStatus(id, status);
+  }
+
   async getDoctorsFromMobile(mobile, isLogin = false){
     const user = await this.doctorRepo.findByMobile(mobile,"DOCTOR");
     
