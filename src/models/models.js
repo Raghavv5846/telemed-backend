@@ -19,6 +19,7 @@ export class Doctor extends BaseModel {
     this.name = (name || '').trim();
     this.mobile = (mobile || '').trim();
     this.role = role;
+    this.status = 0;
   }
 
   validate() {

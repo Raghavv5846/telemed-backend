@@ -13,6 +13,19 @@ exports.get = async (req, res, next) => {
   }
 };
 
+
+exports.setStatus = async (req, res, next) => {
+  try {
+    const user = await doctorService.changeStatus(req.body.doctorId, req.body.newAvailability);
+
+    console.log("status doctor",user);
+    
+    res.json(user);
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.list = async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit, 10) || 20;
