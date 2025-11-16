@@ -23,8 +23,8 @@ Before you begin, ensure you have met the following requirements:
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/](https://github.com/)[your-username]/[repo-name].git
-    cd [repo-name]
+    git clone https://github.com/Raghavv5846/telemed-backend.git
+    cd telemd-backend
     ```
 
 2.  **Install dependencies:**
